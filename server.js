@@ -12,7 +12,8 @@ app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Estado en memoria
-let caucionesData = [];
+let latestValidCauciones = {};
+let isMarketClosed = false;
 let lastNotifiedCauciones = {};
 
 // Configuraciones de entorno
@@ -50,9 +51,11 @@ async function scrapeCauciones() {
         const html = response.data;
         const $ = cheerio.load(html);
 
-        const newCauciones = [];
         let hasChangesAboveThreshold = false;
         let messageToSend = `📈 *Actualización de Cauciones (> ${UMBRAL_TNA}% TNA)*\n\n`;
+
+        let firstTwoTnas = [];
+        let anyFound = false;
 
         $('tbody tr').each((i, element) => {
             const cells = $(element).find('td');
@@ -66,55 +69,65 @@ async function scrapeCauciones() {
                 const fecha = $(cells[6]).text().trim();
 
                 if (!isNaN(plazo) && plazo <= MAX_DIAS && moneda === 'PESOS') {
+                    anyFound = true;
                     // Extraer TNA como número (ej: "23,30 %" -> 23.30)
                     const tnaNumber = parseFloat(tnaStr.replace('%', '').replace(',', '.').trim());
 
-                    newCauciones.push({
-                        plazo,
-                        moneda,
-                        montoTomado,
-                        montoColocado,
-                        tna: tnaStr,
-                        tnaNumber,
-                        fecha
-                    });
+                    if (firstTwoTnas.length < 2) {
+                        firstTwoTnas.push(tnaNumber);
+                    }
 
-                    // Lógica de Notificación
-                    const previousTnaNumber = lastNotifiedCauciones[plazo];
-                    
-                    if (tnaNumber >= UMBRAL_TNA) {
-                        if (previousTnaNumber === undefined) {
-                            // Primera vez que supera el umbral
-                            hasChangesAboveThreshold = true;
-                            messageToSend += `🔹 *${plazo} Días*: ${tnaStr}\n`;
-                            lastNotifiedCauciones[plazo] = tnaNumber;
-                        } else if (tnaNumber !== previousTnaNumber) {
-                            // Si cambió, verificamos si el cambio es mayor a la variación mínima
-                            const diff = Math.abs(tnaNumber - previousTnaNumber);
-                            if (diff >= VARIACION_MINIMA) {
+                    // Solo guardamos si tiene valor, o si es la primera vez que lo vemos (aunque sea 0)
+                    if (tnaNumber > 0 || !latestValidCauciones[plazo]) {
+                        latestValidCauciones[plazo] = {
+                            plazo,
+                            moneda,
+                            montoTomado,
+                            montoColocado,
+                            tna: tnaStr,
+                            tnaNumber,
+                            fecha
+                        };
+                    }
+
+                    // Lógica de Notificación (solo si el TNA es mayor a 0)
+                    if (tnaNumber > 0) {
+                        const previousTnaNumber = lastNotifiedCauciones[plazo];
+                        
+                        if (tnaNumber >= UMBRAL_TNA) {
+                            if (previousTnaNumber === undefined) {
+                                // Primera vez que supera el umbral
                                 hasChangesAboveThreshold = true;
-                                const diffSign = tnaNumber > previousTnaNumber ? '+' : '';
-                                const diffVal = (tnaNumber - previousTnaNumber).toFixed(2);
-                                messageToSend += `🔹 *${plazo} Días*: ${tnaStr} (${diffSign}${diffVal}%)\n`;
+                                messageToSend += `🔹 *${plazo} Días*: ${tnaStr}\n`;
                                 lastNotifiedCauciones[plazo] = tnaNumber;
+                            } else if (tnaNumber !== previousTnaNumber) {
+                                // Si cambió, verificamos si el cambio es mayor a la variación mínima
+                                const diff = Math.abs(tnaNumber - previousTnaNumber);
+                                if (diff >= VARIACION_MINIMA) {
+                                    hasChangesAboveThreshold = true;
+                                    const diffSign = tnaNumber > previousTnaNumber ? '+' : '';
+                                    const diffVal = (tnaNumber - previousTnaNumber).toFixed(2);
+                                    messageToSend += `🔹 *${plazo} Días*: ${tnaStr} (${diffSign}${diffVal}%)\n`;
+                                    lastNotifiedCauciones[plazo] = tnaNumber;
+                                }
                             }
-                        }
-                    } else {
-                        // Si el TNA cayó por debajo del umbral, reseteamos el estado notificado
-                        // Para que si vuelve a subir, vuelva a notificar
-                        if (previousTnaNumber !== undefined) {
-                           delete lastNotifiedCauciones[plazo];
+                        } else {
+                            // Si el TNA cayó por debajo del umbral, reseteamos el estado notificado
+                            if (previousTnaNumber !== undefined) {
+                               delete lastNotifiedCauciones[plazo];
+                            }
                         }
                     }
                 }
             }
         });
 
-        // Ordenar datos
-        newCauciones.sort((a, b) => a.plazo - b.plazo);
-        caucionesData = newCauciones;
+        // Actualizar estado de mercado cerrado (si los primeros 2 plazos dan 0, está cerrado)
+        if (anyFound && firstTwoTnas.length > 0) {
+            isMarketClosed = firstTwoTnas.every(tna => tna === 0);
+        }
 
-        console.log(`Scraping exitoso: Encontradas ${caucionesData.length} cauciones a corto plazo.`);
+        console.log(`Scraping exitoso: Mercado cerrado: ${isMarketClosed}. Valores guardados.`);
 
         // Enviar notificación si hubo cambios significativos que superen el umbral
         if (hasChangesAboveThreshold) {
@@ -128,7 +141,13 @@ async function scrapeCauciones() {
 
 // Endpoint para el Frontend
 app.get('/api/cauciones', (req, res) => {
-    res.json(caucionesData);
+    // Ordenar los valores guardados
+    const sortedCauciones = Object.values(latestValidCauciones).sort((a, b) => a.plazo - b.plazo);
+    
+    res.json({
+        closed: isMarketClosed,
+        cauciones: sortedCauciones
+    });
 });
 
 // Endpoint para configuraciones públicas

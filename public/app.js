@@ -14,8 +14,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function renderCauciones(cauciones) {
-        if (cauciones.length === 0) return; // Si no hay datos, no hacer nada todavía
+    function renderCauciones(data) {
+        // Lógica de banner de mercado cerrado
+        const banner = document.getElementById('market-closed-banner');
+        if (data.closed) {
+            if (banner) banner.classList.remove('hidden');
+        } else {
+            if (banner) banner.classList.add('hidden');
+        }
+
+        const cauciones = data.cauciones || [];
+        const caucionesFiltradas = cauciones.filter(c => c.tnaNumber > 0);
+
+        if (caucionesFiltradas.length === 0) {
+            loader.classList.add('hidden');
+            grid.innerHTML = '<p style="text-align: center; color: var(--text-muted); width: 100%; grid-column: 1 / -1;">No hay operaciones activas en este momento.</p>';
+            return;
+        }
 
         loader.classList.add('hidden');
         grid.classList.remove('hidden');
@@ -23,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Limpiamos el grid
         grid.innerHTML = '';
 
-        cauciones.forEach((caucion, index) => {
+        caucionesFiltradas.forEach((caucion, index) => {
             const card = document.createElement('div');
             card.className = 'card';
             card.style.animationDelay = `${index * 0.1}s`;

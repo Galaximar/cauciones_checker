@@ -68,8 +68,162 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    let historyChartInstance = null;
+    let cachedHistoryData = null;
+    let currentFilter = 'short';
+
+    async function fetchHistory() {
+        try {
+            const response = await fetch('/api/history');
+            if (!response.ok) throw new Error('Error en la respuesta de la API de historial');
+            cachedHistoryData = await response.json();
+            renderChart(cachedHistoryData);
+        } catch (error) {
+            console.error('Error obteniendo historial:', error);
+        }
+    }
+
+    // Manejo de filtros
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            // Actualizar UI de botones
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            // Actualizar filtro y redibujar
+            currentFilter = btn.getAttribute('data-filter');
+            if (cachedHistoryData) {
+                renderChart(cachedHistoryData);
+            }
+        });
+    });
+
+    function renderChart(data) {
+        if (!data || data.length === 0) return;
+        
+        const chartContainer = document.getElementById('chart-container');
+        if (chartContainer) chartContainer.classList.remove('hidden');
+
+        // Group data by plazo
+        let plazos = [...new Set(data.map(d => d.plazo))].sort((a, b) => a - b);
+        
+        // Aplicar filtro
+        if (currentFilter === 'short') {
+            plazos = plazos.filter(p => p <= 3);
+        } else if (currentFilter === 'long') {
+            plazos = plazos.filter(p => p > 3);
+        }
+
+        const fechas = [...new Set(data.map(d => d.fecha))];
+
+        const datasets = plazos.map((plazo, index) => {
+            const colors = [
+                '#6366f1', // Indigo
+                '#ec4899', // Pink
+                '#10b981', // Emerald
+                '#f59e0b', // Amber
+                '#8b5cf6', // Violet
+                '#3b82f6', // Blue
+                '#ef4444', // Red
+                '#06b6d4', // Cyan
+                '#f97316', // Orange
+                '#a855f7'  // Purple
+            ];
+            const color = colors[index % colors.length];
+
+            const dataPoints = fechas.map(fecha => {
+                const record = data.find(d => d.fecha === fecha && d.plazo === plazo);
+                return record ? { tna: record.tna, hora: record.hora_max } : null;
+            });
+
+            return {
+                label: `${plazo} Días`,
+                data: dataPoints.map(p => p ? p.tna : null),
+                horaMax: dataPoints.map(p => p ? p.hora : null),
+                borderColor: color,
+                backgroundColor: color,
+                borderWidth: 3,
+                pointBackgroundColor: color,
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                tension: 0.3,
+                fill: false,
+                spanGaps: true
+            };
+        });
+
+        const ctx = document.getElementById('historyChart').getContext('2d');
+        
+        if (historyChartInstance) {
+            historyChartInstance.destroy();
+        }
+
+        historyChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: fechas.map(f => {
+                    const parts = f.split('-');
+                    return `${parts[2]}/${parts[1]}`;
+                }),
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                color: '#e2e8f0',
+                plugins: {
+                    legend: {
+                        labels: { color: '#e2e8f0' }
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                        titleColor: '#e2e8f0',
+                        bodyColor: '#94a3b8',
+                        borderColor: 'rgba(56, 189, 248, 0.3)',
+                        borderWidth: 1,
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) label += ': ';
+                                if (context.parsed.y !== null) label += context.parsed.y + '%';
+                                
+                                const hora = context.dataset.horaMax[context.dataIndex];
+                                if (hora) label += ` (Pico: ${hora}hs)`;
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    y: {
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#94a3b8' },
+                        title: {
+                            display: true,
+                            text: 'TNA (%)',
+                            color: '#e2e8f0'
+                        }
+                    }
+                }
+            }
+        });
+
+        // Scroll al final para ver la fecha más reciente
+        setTimeout(() => {
+            const wrapper = document.querySelector('.chart-scroll-wrapper');
+            if (wrapper) wrapper.scrollLeft = wrapper.scrollWidth;
+        }, 300);
+    }
+
     // Obtener datos al inicio
     fetchCauciones();
+    fetchHistory();
 
     // Obtener configuración (Link de Telegram)
     fetch('/api/config')
@@ -93,5 +247,8 @@ document.addEventListener('DOMContentLoaded', () => {
         .catch(err => console.error('Error cargando config:', err));
 
     // Actualizar cada 60 segundos (60000 ms)
-    setInterval(fetchCauciones, 60000);
+    setInterval(() => {
+        fetchCauciones();
+        fetchHistory();
+    }, 60000);
 });

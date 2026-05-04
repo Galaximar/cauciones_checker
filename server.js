@@ -4,9 +4,37 @@ const cheerio = require('cheerio');
 const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
+const sqlite3 = require('sqlite3').verbose();
+const { open } = require('sqlite');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+let db;
+async function initializeDB() {
+    db = await open({
+        filename: path.join(__dirname, 'database.sqlite'),
+        driver: sqlite3.Database
+    });
+    
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS cauciones_history (
+            fecha TEXT,
+            plazo INTEGER,
+            tna REAL,
+            hora_max TEXT,
+            PRIMARY KEY (fecha, plazo)
+        )
+    `);
+    
+    // Asegurar que la columna existe si la tabla ya fue creada
+    try {
+        await db.exec('ALTER TABLE cauciones_history ADD COLUMN hora_max TEXT');
+    } catch (e) {
+        // Columna ya existe
+    }
+    console.log('Base de datos SQLite inicializada correctamente.');
+}
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -15,6 +43,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 let latestValidCauciones = {};
 let isMarketClosed = false;
 let lastNotifiedCauciones = {};
+let lastNotificationDate = new Date().toDateString();
 
 // Configuraciones de entorno
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -40,7 +69,11 @@ async function notifyTelegram(message) {
         });
         console.log('Notificación de Telegram enviada con éxito.');
     } catch (error) {
-        console.error('Error enviando notificación a Telegram:', error.message);
+        if (error.response && error.response.data) {
+            console.error('Error enviando notificación a Telegram:', error.response.data);
+        } else {
+            console.error('Error enviando notificación a Telegram:', error.message);
+        }
     }
 }
 
@@ -50,6 +83,14 @@ async function scrapeCauciones() {
         const response = await axios.get('https://iol.invertironline.com/mercado/cotizaciones/argentina/cauciones/todas');
         const html = response.data;
         const $ = cheerio.load(html);
+
+        // Reset diario
+        const currentDateStr = new Date().toDateString();
+        if (currentDateStr !== lastNotificationDate) {
+            console.log('Nuevo día detectado: reiniciando contador de variaciones y notificaciones.');
+            lastNotifiedCauciones = {};
+            lastNotificationDate = currentDateStr;
+        }
 
         let hasChangesAboveThreshold = false;
         let messageToSend = `📈 *Actualización de Cauciones (> ${UMBRAL_TNA}% TNA)*\n\n`;
@@ -92,6 +133,21 @@ async function scrapeCauciones() {
 
                     // Lógica de Notificación (solo si el TNA es mayor a 0)
                     if (tnaNumber > 0) {
+                        // Guardar histórico en DB (Guardamos el TNA más alto del día)
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const nowTimeStr = new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+                        if (db) {
+                            db.run(
+                                `INSERT INTO cauciones_history (fecha, plazo, tna, hora_max) 
+                                 VALUES (?, ?, ?, ?) 
+                                 ON CONFLICT(fecha, plazo) DO UPDATE SET 
+                                    tna = excluded.tna, 
+                                    hora_max = excluded.hora_max 
+                                 WHERE excluded.tna > cauciones_history.tna`,
+                                [todayStr, plazo, tnaNumber, nowTimeStr]
+                            ).catch(err => console.error('Error insertando en DB:', err.message));
+                        }
+
                         const previousTnaNumber = lastNotifiedCauciones[plazo];
                         
                         if (tnaNumber >= UMBRAL_TNA) {
@@ -158,8 +214,23 @@ app.get('/api/config', (req, res) => {
     });
 });
 
+// Endpoint para historial
+app.get('/api/history', async (req, res) => {
+    if (!db) {
+        return res.status(500).json({ error: 'Base de datos no inicializada' });
+    }
+    try {
+        const rows = await db.all('SELECT fecha, plazo, tna, hora_max FROM cauciones_history ORDER BY fecha ASC, plazo ASC');
+        res.json(rows);
+    } catch (error) {
+        console.error('Error obteniendo historial:', error.message);
+        res.status(500).json({ error: 'Error obteniendo historial' });
+    }
+});
+
 // Arrancar servidor y worker
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+    await initializeDB();
     console.log(`Servidor iniciado en http://localhost:${PORT}`);
     
     // Ejecutar scraping inicial

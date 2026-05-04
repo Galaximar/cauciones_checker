@@ -12,6 +12,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   </head>
   <body>
     <div class="background-orbs">
@@ -54,10 +55,32 @@
         <!-- Las tarjetas se insertarán aquí dinámicamente -->
       </div>
 
+      <div id="chart-container" class="card hidden" style="margin-top: 2rem; padding: 1.5rem; position: relative; width:100%">
+        <div class="chart-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
+          <h2 style="font-size: 1.2rem; color: var(--text-main); margin: 0;">Historial de TNA</h2>
+          <div class="chart-filters" style="display: flex; gap: 0.5rem; background: rgba(0,0,0,0.2); padding: 0.3rem; border-radius: 12px;">
+            <button class="filter-btn" data-filter="all">Todos</button>
+            <button class="filter-btn active" data-filter="short">1-3 Días</button>
+            <button class="filter-btn" data-filter="long">4-10 Días</button>
+          </div>
+        </div>
+        <div class="chart-scroll-wrapper" style="width: 100%; overflow-x: auto; padding-bottom: 1rem;">
+          <div style="height: 350px; min-width: 1000px;">
+            <canvas id="historyChart"></canvas>
+          </div>
+        </div>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 1.5rem; text-align: center; opacity: 0.8;">
+          💡 El gráfico registra el <strong>valor TNA máximo</strong> alcanzado durante cada día de mercado.
+        </p>
+      </div>
+
       <footer>
         <p>Actualización automática cada 60 segundos</p>
         <p id="last-update" class="last-update">
           Última actualización: --:--:--
+        </p>
+        <p style="margin-top: 1rem; font-size: 0.75rem; opacity: 0.5;">
+          Fuente: <a href="https://iol.invertironline.com/mercado/cotizaciones/argentina/cauciones/todas" target="_blank" style="color: inherit; text-decoration: underline;">InvertirOnline</a>
         </p>
       </footer>
     </main>
